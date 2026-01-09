@@ -1,0 +1,30 @@
+# Environment
+.env
+.venv/
+venv/
+env/
+__pycache__/
+*.pyc
+*.pyo
+
+# Charts output
+charts/
+*.png
+
+# IDE
+.vscode/
+.idea/
+
+# Logs
+*.log
+logs/
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Sensitive files
+*.pem
+positions.json
+backtest_results.csv
+crypto-bot.service

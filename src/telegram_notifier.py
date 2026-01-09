@@ -1,0 +1,342 @@
+"""
+Telegram Notifier Module
+=========================
+Sends trading signals with chart images to Telegram.
+Uses simple HTTP requests to Telegram Bot API.
+"""
+import requests
+from pathlib import Path
+from typing import Optional
+import logging
+import os
+import sys
+
+# Add parent directory to path for imports
+sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
+
+try:
+    from config import TELEGRAM_BOT_TOKEN, TELEGRAM_CHAT_ID
+except ImportError:
+    TELEGRAM_BOT_TOKEN = ""
+    TELEGRAM_CHAT_ID = ""
+
+from signal_generator import Signal, SignalDirection
+
+logger = logging.getLogger(__name__)
+
+# Telegram Bot API base URL
+TELEGRAM_API_BASE = "https://api.telegram.org/bot{token}"
+
+
+class TelegramNotifier:
+    """
+    Telegram notification handler.
+    Sends trading signals with chart images via Telegram Bot API.
+    """
+    
+    def __init__(self, bot_token: str = None, chat_id: str = None):
+        """
+        Initialize the Telegram notifier.
+        
+        Args:
+            bot_token: Telegram Bot Token (from @BotFather)
+            chat_id: Telegram Chat ID to send messages to
+        """
+        self.bot_token = bot_token or TELEGRAM_BOT_TOKEN
+        self.chat_id = chat_id or TELEGRAM_CHAT_ID
+        self.api_base = TELEGRAM_API_BASE.format(token=self.bot_token)
+        
+        if not self.bot_token or not self.chat_id:
+            logger.warning("Telegram credentials not configured. Set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env")
+    
+    def is_configured(self) -> bool:
+        """Check if Telegram is properly configured."""
+        return bool(self.bot_token and self.chat_id and 
+                    self.bot_token != "your_bot_token_here" and
+                    self.chat_id != "your_chat_id_here")
+    
+    def send_message(self, text: str, parse_mode: str = "HTML") -> bool:
+        """
+        Send a text message to Telegram.
+        
+        Args:
+            text: Message text
+            parse_mode: Parse mode ("HTML" or "Markdown")
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_configured():
+            logger.warning("Telegram not configured, skipping message send")
+            return False
+        
+        url = f"{self.api_base}/sendMessage"
+        payload = {
+            "chat_id": self.chat_id,
+            "text": text,
+            "parse_mode": parse_mode
+        }
+        
+        try:
+            response = requests.post(url, json=payload, timeout=30)
+            response.raise_for_status()
+            logger.info("Telegram message sent successfully")
+            return True
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to send Telegram message: {e}")
+            return False
+    
+    def send_photo(
+        self, 
+        image_path: str, 
+        caption: str = "",
+        parse_mode: str = "HTML"
+    ) -> bool:
+        """
+        Send a photo with caption to Telegram.
+        
+        Args:
+            image_path: Path to the image file
+            caption: Optional caption for the image
+            parse_mode: Parse mode for caption
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        if not self.is_configured():
+            logger.warning("Telegram not configured, skipping photo send")
+            return False
+        
+        image_path = Path(image_path)
+        if not image_path.exists():
+            logger.error(f"Image file not found: {image_path}")
+            return False
+        
+        url = f"{self.api_base}/sendPhoto"
+        
+        try:
+            with open(image_path, "rb") as photo:
+                files = {"photo": photo}
+                data = {
+                    "chat_id": self.chat_id,
+                    "caption": caption,
+                    "parse_mode": parse_mode
+                }
+                
+                response = requests.post(url, data=data, files=files, timeout=60)
+                response.raise_for_status()
+                logger.info(f"Telegram photo sent successfully: {image_path.name}")
+                return True
+                
+        except requests.exceptions.RequestException as e:
+            logger.error(f"Failed to send Telegram photo: {e}")
+            return False
+    
+    def send_signal_alert(
+        self, 
+        signal: Signal, 
+        chart_path: Optional[str] = None
+    ) -> bool:
+        """
+        Send a complete signal alert with chart to Telegram.
+        
+        Args:
+            signal: Signal object with trade details
+            chart_path: Path to chart image (optional)
+        
+        Returns:
+            True if successful, False otherwise
+        """
+        # Format the caption
+        caption = self._format_signal_caption(signal)
+        
+        if chart_path and Path(chart_path).exists():
+            # Send photo with caption
+            return self.send_photo(chart_path, caption)
+        else:
+            # Send text only
+            return self.send_message(caption)
+    
+    def _format_signal_caption(self, signal: Signal) -> str:
+        """
+        Format signal data into an attractive Telegram caption.
+        
+        Args:
+            signal: Signal object
+        
+        Returns:
+            Formatted caption string
+        """
+        # Direction styling
+        if signal.direction.value == "long":
+            direction_emoji = "🟢"
+            direction_text = "LONG"
+            header_style = "📈"
+        else:
+            direction_emoji = "🔴"
+            direction_text = "SHORT"
+            header_style = "📉"
+        
+        # Channel type emoji
+        channel_emoji = {
+            "ascending": "⬆️",
+            "descending": "⬇️",
+            "horizontal": "↔️",
+            "converging": "🔺",
+            "diverging": "🔻"
+        }.get(signal.channel_type.value, "📊")
+        
+        # Calculate potential profit %
+        if signal.direction.value == "long":
+            profit_pct = ((signal.take_profit - signal.entry_price) / signal.entry_price) * 100
+            risk_pct = ((signal.entry_price - signal.stop_loss) / signal.entry_price) * 100
+        else:
+            profit_pct = ((signal.entry_price - signal.take_profit) / signal.entry_price) * 100
+            risk_pct = ((signal.stop_loss - signal.entry_price) / signal.entry_price) * 100
+        
+        # Confidence stars
+        score = getattr(signal, 'confidence_score', 0) or 0
+        if score >= 90:
+            conf_display = "⭐⭐⭐⭐⭐"
+        elif score >= 75:
+            conf_display = "⭐⭐⭐⭐"
+        elif score >= 60:
+            conf_display = "⭐⭐⭐"
+        else:
+            conf_display = "⭐⭐"
+        
+        # Build the premium caption
+        caption = f"""
+╔═══════════════════╗
+   {direction_emoji} <b>{direction_text} SIGNAL</b> {direction_emoji}
+╚═══════════════════╝
+
+🪙 <b>{signal.symbol.split('/')[0]}</b>
+{channel_emoji} <i>{signal.channel_type.value.capitalize()} Channel</i>
+⏱ <code>{signal.timeframe}</code>
+
+┏━━ TRADE SETUP ━━┓
+
+   💵 Entry:  <code>${signal.entry_price:,.4f}</code>
+   ✅ TP:      <code>${signal.take_profit:,.4f}</code>  (+{profit_pct:.2f}%)
+   ❌ SL:      <code>${signal.stop_loss:,.4f}</code>  (-{risk_pct:.2f}%)
+
+┗━━━━━━━━━━━━━━━━━┛
+
+📊 <b>R:R Ratio:</b> <code>1:{signal.rr_ratio:.2f}</code>
+🎯 <b>Confidence:</b> {conf_display} ({score:.0f}/100)
+
+<i>⚠️ Risk only what you can afford to lose</i>
+"""
+        return caption.strip()
+
+
+# Default notifier instance
+_notifier: Optional[TelegramNotifier] = None
+
+
+def get_notifier() -> TelegramNotifier:
+    """Get or create the default TelegramNotifier instance."""
+    global _notifier
+    if _notifier is None:
+        _notifier = TelegramNotifier()
+    return _notifier
+
+
+def send_telegram_alert(signal: Signal, image_path: Optional[str] = None) -> bool:
+    """
+    Convenience function to send a signal alert.
+    
+    Args:
+        signal: Signal object
+        image_path: Path to chart image
+    
+    Returns:
+        True if successful
+    """
+    return get_notifier().send_signal_alert(signal, image_path)
+
+
+def send_startup_message() -> bool:
+    """Send a startup notification to Telegram."""
+    notifier = get_notifier()
+    if not notifier.is_configured():
+        return False
+    
+    message = """
+🤖 <b>Crypto Signal Bot Started</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+📊 Monitoring top coins by volume
+⏱ Timeframes: 15m, 1h
+🔍 Looking for channel patterns
+
+Bot is now active and scanning for signals...
+"""
+    return notifier.send_message(message.strip())
+
+
+def send_shutdown_message() -> bool:
+    """Send a shutdown notification to Telegram."""
+    notifier = get_notifier()
+    if not notifier.is_configured():
+        return False
+    
+    message = """
+🔴 <b>Crypto Signal Bot Stopped</b>
+━━━━━━━━━━━━━━━━━━━━━━
+
+Bot has been shut down.
+"""
+    return notifier.send_message(message.strip())
+
+
+def send_telegram_message(text: str) -> bool:
+    """
+    Convenience function to send a simple text message.
+    
+    Args:
+        text: Message text
+    
+    Returns:
+        True if successful
+    """
+    return get_notifier().send_message(text)
+
+
+# Test the module when run directly
+if __name__ == "__main__":
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s'
+    )
+    
+    print("=" * 60)
+    print("Telegram Notifier Module Test")
+    print("=" * 60)
+    
+    notifier = TelegramNotifier()
+    
+    if notifier.is_configured():
+        print("\n✅ Telegram is configured")
+        print(f"   Bot Token: {notifier.bot_token[:10]}...{notifier.bot_token[-5:]}")
+        print(f"   Chat ID: {notifier.chat_id}")
+        
+        # Test sending a message
+        print("\n📤 Sending test message...")
+        success = notifier.send_message("🧪 <b>Test Message</b>\n\nIf you see this, the bot is working!")
+        
+        if success:
+            print("✅ Test message sent successfully!")
+        else:
+            print("❌ Failed to send test message")
+    else:
+        print("\n⚠️ Telegram is NOT configured")
+        print("   Please set TELEGRAM_BOT_TOKEN and TELEGRAM_CHAT_ID in .env file")
+        print("\n   Example .env content:")
+        print("   TELEGRAM_BOT_TOKEN=123456789:ABCdefGHIjklMNOpqrSTUvwxYZ")
+        print("   TELEGRAM_CHAT_ID=123456789")
+    
+    print("\n" + "=" * 60)
+    print("✅ Telegram notifier test complete!")
+    print("=" * 60)
