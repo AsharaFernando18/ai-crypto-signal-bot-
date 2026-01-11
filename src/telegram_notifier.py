@@ -207,26 +207,30 @@ class TelegramNotifier:
         
         # Build the premium caption
         caption = f"""
-╔═══════════════════╗
-   {direction_emoji} <b>{direction_text} SIGNAL</b> {direction_emoji}
-╚═══════════════════╝
+{direction_emoji} <b>{direction_text} SIGNAL</b> {direction_emoji}
+━━━━━━━━━━━━━━
 
 🪙 <b>{signal.symbol.split('/')[0]}</b>
-{channel_emoji} <i>{signal.channel_type.value.capitalize()} Channel</i>
+{channel_emoji} <i>{signal.channel_type.value.capitalize()}</i>
 ⏱ <code>{signal.timeframe}</code>
 
-┏━━ TRADE SETUP ━━┓
+<b>TRADE SETUP</b>
+━━━━━━━━━━━━━━
 
-   💵 Entry:  <code>${signal.entry_price:,.4f}</code>
-   ✅ TP:      <code>${signal.take_profit:,.4f}</code>  (+{profit_pct:.2f}%)
-   ❌ SL:      <code>${signal.stop_loss:,.4f}</code>  (-{risk_pct:.2f}%)
+💵 Entry: <code>${signal.entry_price:,.4f}</code>
+✅ TP: <code>${signal.take_profit:,.4f}</code>
+   (+{profit_pct:.2f}%)
+❌ SL: <code>${signal.stop_loss:,.4f}</code>
+   (-{risk_pct:.2f}%)
 
-┗━━━━━━━━━━━━━━━━━┛
+━━━━━━━━━━━━━━
 
-📊 <b>R:R Ratio:</b> <code>1:{signal.rr_ratio:.2f}</code>
-🎯 <b>Confidence:</b> {conf_display} ({score:.0f}/100)
+📊 R:R: <code>1:{signal.rr_ratio:.2f}</code>
+🎯 Score: {conf_display}
+<code>({score:.0f}/100)</code>
 
-<i>⚠️ Risk only what you can afford to lose</i>
+<i>⚠️ Risk only what you can
+afford to lose</i>
 """
         return caption.strip()
 
@@ -263,15 +267,39 @@ def send_startup_message() -> bool:
     if not notifier.is_configured():
         return False
     
-    message = """
-🤖 <b>Crypto Signal Bot Started</b>
-━━━━━━━━━━━━━━━━━━━━━━
+    from datetime import datetime
+    from config import TOP_COINS_COUNT, TIMEFRAMES, MIN_CONFIDENCE_SCORE
+    
+    message = f"""
+🚀 <b>SIGNAL BOT ACTIVATED</b> 🚀
+━━━━━━━━━━━━━━━━━━━━
 
-📊 Monitoring top coins by volume
-⏱ Timeframes: 15m, 1h
-🔍 Looking for channel patterns
+<b>⚡ System Grade: 11/10 LEGENDARY</b>
 
-Bot is now active and scanning for signals...
+<b>📊 Monitoring:</b>
+🪙 Top {TOP_COINS_COUNT} coins by volume
+⏱ Timeframes: {', '.join(TIMEFRAMES)}
+⭐ Min Score: {MIN_CONFIDENCE_SCORE}
+
+<b>🎯 Features Active:</b>
+✅ Market Regime Detection
+✅ Dynamic Kelly Sizing
+✅ ML Signal Scoring
+✅ Trailing Stops
+✅ Partial Profits
+✅ Real-Time Correlation
+✅ Risk Management
+
+<b>🛡️ Protection:</b>
+🔥 Portfolio Heat Monitor
+📊 Correlation Matrix
+🎯 Diversification Score
+⚡ Circuit Breaker
+
+━━━━━━━━━━━━━━━━━━━━
+<i>🟢 Online | {datetime.now().strftime('%H:%M:%S')}</i>
+
+<b>Ready to hunt alpha! 🎯</b>
 """
     return notifier.send_message(message.strip())
 

@@ -23,7 +23,7 @@ sys.path.insert(0, str(Path(__file__).parent / "src"))
 
 from config import (
     SCAN_INTERVAL_SECONDS, TOP_COINS_COUNT, TIMEFRAMES,
-    CHARTS_DIR, LOG_LEVEL, MIN_CONFIDENCE_SCORE
+    CHARTS_DIR, LOG_LEVEL, MIN_CONFIDENCE_SCORE, INITIAL_CAPITAL
 )
 from src.data_fetcher import DataFetcher, get_top_coins, fetch_ohlcv
 from src.channel_builder import detect_channel, Channel
@@ -35,6 +35,21 @@ from src.telegram_notifier import (
     send_shutdown_message, get_notifier, send_telegram_message
 )
 from src.position_tracker import get_tracker, PositionTracker
+
+# Phase 1: Institutional Risk Management
+from src.risk_manager import get_risk_manager, RiskManager
+from src.execution_model import ExecutionModel
+from src.data_validator import DataValidator
+
+# Phase 3: Optimization
+from src.position_sizer import get_position_sizer
+from src.signal_strength import get_signal_classifier, SignalStrength
+from src.trailing_stops import get_stop_manager
+from src.partial_profits import get_profit_manager
+from src.market_bias import get_bias_detector
+
+# Phase 4: ML Enhancement
+from src.ml_scorer import get_ml_scorer
 
 # Configure logging
 logging.basicConfig(
@@ -124,6 +139,16 @@ def scan_symbol(
             logger.warning(f"Insufficient data for {symbol} {timeframe}: {len(df)} candles")
             return None
         
+        # PHASE 1: Data Quality Validation
+        validation = DataValidator.validate_ohlcv(df, symbol, timeframe, strict=True)
+        
+        if not validation.is_valid:
+            logger.warning(f"❌ Data validation failed for {symbol} {timeframe}: {validation.issues}")
+            return None
+        
+        if validation.warnings:
+            logger.debug(f"⚠️ Data warnings for {symbol} {timeframe}: {validation.warnings}")
+        
         # Build channel
         channel = detect_channel(df)
         
@@ -138,6 +163,36 @@ def scan_symbol(
         
         if signal is None:
             return None
+        
+        # PHASE 2: Market Regime Detection
+        from regime_detector import get_regime_detector
+        
+        regime_detector = get_regime_detector()
+        regime = regime_detector.detect_regime(df, symbol)
+        
+        # DISABLED: Allow trading in all regimes for maximum signals
+        # if regime and not regime.should_trade:
+        #     logger.warning(f"⚠️ Regime unsuitable for trading {symbol}: {regime.trend}, {regime.volatility}, {regime.liquidity}")
+        #     return None
+        
+        # PHASE 3.5: Market Bias Detection (DISABLED for maximum signals)
+        # try:
+        #     bias_detector = get_bias_detector()
+        #     market_bias = bias_detector.detect_bias(df)
+        #     
+        #     # Reject shorts in strong bull markets
+        #     if signal.direction.value == "short" and market_bias.bias == "bullish" and market_bias.strength > 0.6:
+        #         logger.warning(f"🚫 SHORT rejected: Strong BULLISH bias ({market_bias.strength:.2f}) | Trend: {market_bias.price_trend:+.1f}%")
+        #         return None
+        #     
+        #     # Reject longs in strong bear markets
+        #     if signal.direction.value == "long" and market_bias.bias == "bearish" and market_bias.strength > 0.6:
+        #         logger.warning(f"🚫 LONG rejected: Strong BEARISH bias ({market_bias.strength:.2f}) | Trend: {market_bias.price_trend:+.1f}%")
+        #         return None
+        #     
+        #     logger.info(f"✅ Bias check passed: {market_bias.bias.upper()} market, {signal.direction.value.upper()} signal")
+        # except Exception as e:
+        #     logger.debug(f"Bias detection skipped: {e}")
         
         # Apply signal filters (Basic + Advanced)
         filter_result = apply_signal_filters(
@@ -155,13 +210,67 @@ def scan_symbol(
             logger.info(f"Signal filtered out for {symbol} {timeframe}: {filter_result.reasons}")
             return None
         
-        # Check minimum confidence score
-        if filter_result.confidence_score < MIN_CONFIDENCE_SCORE:
-            logger.info(f"Signal confidence too low for {symbol} {timeframe}: {filter_result.confidence_score}")
+        # PHASE 2: Apply regime-based confidence adjustment
+        base_confidence = filter_result.confidence_score
+        
+        if regime:
+            adjusted_confidence = base_confidence + regime.confidence_adjustment
+            logger.info(f"📊 Regime adjustment: {base_confidence} → {adjusted_confidence} ({regime.confidence_adjustment:+d}) | {regime.trend}")
+            
+            # Apply SL multiplier from regime
+            if regime.sl_multiplier != 1.0:
+                original_sl = signal.stop_loss
+                if signal.direction.value == "long":
+                    sl_distance = signal.entry_price - signal.stop_loss
+                    signal.stop_loss = signal.entry_price - (sl_distance * regime.sl_multiplier)
+                else:
+                    sl_distance = signal.stop_loss - signal.entry_price
+                    signal.stop_loss = signal.entry_price + (sl_distance * regime.sl_multiplier)
+                
+                logger.info(f"🛡️ SL adjusted for {regime.volatility}: {original_sl:.4f} → {signal.stop_loss:.4f} ({regime.sl_multiplier:.1f}x)")
+        else:
+            adjusted_confidence = base_confidence
+        
+        # PHASE 3: Signal Strength Classification
+        try:
+            classifier = get_signal_classifier()
+            strength_result = classifier.classify_signal(signal, df, channel, higher_tf_channel)
+            
+            # Apply strength-based confidence boost
+            adjusted_confidence += strength_result.confidence_boost
+            signal_strength = strength_result.strength.name.lower()
+            
+            logger.info(f"💪 Signal Strength: {strength_result.strength.name} ({strength_result.confirmation_count} confirmations) | Boost: {strength_result.confidence_boost:+d}")
+        except Exception as e:
+            logger.warning(f"Signal strength classification failed: {e}")
+            signal_strength = "moderate"
+        
+        # PHASE 4: ML Win Probability Prediction
+        try:
+            ml_scorer = get_ml_scorer()
+            ml_prediction = ml_scorer.predict_win_probability(
+                signal, channel, df, regime, 
+                confirmation_count=strength_result.confirmation_count if 'strength_result' in locals() else 0
+            )
+            
+            if ml_prediction:
+                # Apply ML-based confidence boost
+                adjusted_confidence += ml_prediction.confidence_boost
+                
+                logger.info(f"🤖 ML Prediction: {ml_prediction.win_probability:.1%} win probability | Boost: {ml_prediction.confidence_boost:+d}")
+                
+                # Store ML prediction with signal
+                signal.ml_win_probability = ml_prediction.win_probability
+        except Exception as e:
+            logger.debug(f"ML prediction not available: {e}")
+        
+        # Check minimum confidence score (after all adjustments)
+        if adjusted_confidence < MIN_CONFIDENCE_SCORE:
+            logger.info(f"Signal confidence too low for {symbol} {timeframe}: {adjusted_confidence}")
             return None
         
-        # Update signal with filter results
-        signal.confidence_score = filter_result.confidence_score
+        # Update signal with all adjustments
+        signal.confidence_score = adjusted_confidence
         signal.filter_reasons = tuple(filter_result.reasons)
         
         # Check if we should send this signal (avoid duplicates)
@@ -313,6 +422,36 @@ def run_scan_cycle(fetcher: DataFetcher) -> int:
             for signal, df, channel in symbol_signals:
                 try:
                     logger.info(f"🚨 SIGNAL: {signal.direction.value.upper()} {symbol} {signal.timeframe} (Score: {signal.confidence_score:.0f})")
+                    
+                    # PHASE 1: Risk Management Validation
+                    tracker = get_tracker()
+                    risk_manager = get_risk_manager(initial_capital=INITIAL_CAPITAL)
+                    
+                    # Update capital with current P&L
+                    stats = tracker.get_stats()
+                    # Estimate current capital (simplified - will be more accurate with real trading)
+                    total_pnl_percent = stats['avg_pnl'] * stats['total_trades'] if stats['total_trades'] > 0 else 0
+                    current_capital = INITIAL_CAPITAL * (1 + total_pnl_percent / 100)
+                    risk_manager.update_capital(current_capital)
+                    
+                    # Validate new position
+                    is_valid, risk_metrics = risk_manager.validate_new_position(
+                        signal,
+                        tracker.active_positions,
+                        fetcher
+                    )
+                    
+                    if not is_valid:
+                        logger.warning(f"🛡️ RISK REJECTED: {risk_metrics.rejection_reason}")
+                        logger.info(f"   Portfolio Heat: {risk_metrics.portfolio_heat*100:.2f}% | "
+                                  f"Positions: {risk_metrics.num_positions}/{risk_manager.max_positions} | "
+                                  f"Drawdown: {risk_metrics.current_drawdown*100:.1f}%")
+                        continue  # Skip this signal
+                    
+                    logger.info(f"✅ Risk Check Passed | Heat: {risk_metrics.portfolio_heat*100:.2f}% | "
+                              f"Available: {risk_metrics.available_risk*100:.2f}%")
+                    
+                    # Generate chart and send alert
                     chart_path = generate_signal_chart(df, channel, signal, symbol, signal.timeframe)
                     
                     if send_telegram_alert(signal, chart_path):
@@ -320,7 +459,6 @@ def run_scan_cycle(fetcher: DataFetcher) -> int:
                         signals_found += 1
                         
                         # Track position for TP/SL monitoring
-                        tracker = get_tracker()
                         tracker.add_position(signal)
                     else:
                         logger.warning(f"⚠️ Failed to send alert for {symbol}")
@@ -375,6 +513,15 @@ def main():
     """)
     
     logger.info("Starting Crypto Futures Signal Bot...")
+    
+    # Initialize Risk Manager
+    risk_manager = get_risk_manager(initial_capital=INITIAL_CAPITAL)
+    logger.info(f"🛡️ Risk Manager initialized:")
+    logger.info(f"   Capital: ${INITIAL_CAPITAL:,.2f}")
+    logger.info(f"   Max Portfolio Risk: {risk_manager.max_portfolio_risk*100}%")
+    logger.info(f"   Max Positions: {risk_manager.max_positions}")
+    logger.info(f"   Max Correlated Exposure: {risk_manager.max_correlated_exposure*100}%")
+    logger.info(f"   Drawdown Circuit Breaker: {risk_manager.max_drawdown*100}%")
     
     # Check Telegram configuration
     notifier = get_notifier()

@@ -281,20 +281,20 @@ class PositionTracker:
         dir_emoji = "📈" if position.direction == "long" else "📉"
         
         return f"""
-╔═══════════════════╗
-    {header_emoji} <b>{status}</b> {header_emoji}
-╚═══════════════════╝
+{header_emoji} <b>{status}</b> {header_emoji}
+━━━━━━━━━━━━━━
 
 🪙 <b>{position.symbol.split('/')[0]}</b>
 {dir_emoji} {position.direction.upper()}
 
-┏━━━ RESULT ━━━━┓
+<b>RESULT</b>
+━━━━━━━━━━━━━━
 
-   💵 Entry: <code>${position.entry_price:.4f}</code>
-   🏁 Exit:   <code>${position.exit_price:.4f}</code>
-   {result_emoji} PnL:   <code>{position.pnl_percent:+.2f}%</code>
+💵 Entry: <code>${position.entry_price:.4f}</code>
+🏁 Exit: <code>${position.exit_price:.4f}</code>
+{result_emoji} PnL: <code>{position.pnl_percent:+.2f}%</code>
 
-┗━━━━━━━━━━━━━━━┛
+━━━━━━━━━━━━━━
 
 ⏱ <b>Duration:</b> {duration_str}
 """
