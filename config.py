@@ -62,6 +62,13 @@ SR_LOOKBACK_PERIODS = 50  # Periods to look back for S/R levels
 SR_TOUCH_TOLERANCE = 0.002  # 0.2% tolerance for S/R matching
 FUNDING_RATE_THRESHOLD = 0.0005  # 0.05% funding rate considered "high"
 
+# DCA (Dollar Cost Averaging) Configuration
+ENABLE_DCA_ALERTS = True  # Enable DCA opportunity alerts
+MIN_DCA_DISTANCE_PERCENT = 1.0  # Minimum 1% worse than entry for DCA
+MAX_DCA_COUNT = 3  # Maximum 3 DCA entries (total 4 including initial)
+DCA_ZONE_SPACING_PERCENT = 1.5  # 1.5% spacing between suggested DCA zones
+MIN_DCA_CONFIDENCE = 60  # Minimum confidence score for DCA signals
+
 # Chart Settings
 CHART_BARS = 80  # Number of bars to show on chart
 CHART_STYLE = "nightclouds"  # mplfinance style

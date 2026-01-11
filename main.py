@@ -32,9 +32,12 @@ from src.signal_filters import apply_signal_filters, FilterResult
 from src.chart_generator import generate_signal_chart
 from src.telegram_notifier import (
     send_telegram_alert, send_startup_message, 
-    send_shutdown_message, get_notifier, send_telegram_message
+    send_shutdown_message, get_notifier, send_telegram_message,
+    send_dca_opportunity_alert, send_dca_confirmation
 )
 from src.position_tracker import get_tracker, PositionTracker
+from src.dca_manager import get_dca_manager
+from src.channel_builder import ChannelType
 
 # Phase 1: Institutional Risk Management
 from src.risk_manager import get_risk_manager, RiskManager
@@ -419,10 +422,14 @@ def run_scan_cycle(fetcher: DataFetcher) -> int:
                     logger.info(f"   Winner: {winner[0].direction.value.upper()} (Score: {winner[0].confidence_score})")
             
             # Process valid signals
+            tracker = get_tracker()
+            dca_manager = get_dca_manager()
+            
             for signal, df, channel in symbol_signals:
                 try:
                     logger.info(f"🚨 SIGNAL: {signal.direction.value.upper()} {symbol} {signal.timeframe} (Score: {signal.confidence_score:.0f})")
                     
+<<<<<<< HEAD
                     # PHASE 1: Risk Management Validation
                     tracker = get_tracker()
                     risk_manager = get_risk_manager(initial_capital=INITIAL_CAPITAL)
@@ -460,8 +467,50 @@ def run_scan_cycle(fetcher: DataFetcher) -> int:
                         
                         # Track position for TP/SL monitoring
                         tracker.add_position(signal)
+=======
+                    # CHECK FOR DCA OPPORTUNITY
+                    dca_opportunity = None
+                    for position in tracker.active_positions:
+                        if position.symbol == symbol:
+                            # Check if this signal is a DCA opportunity
+                            dca_opp = dca_manager.detect_dca_opportunity(position, signal)
+                            if dca_opp:
+                                dca_opportunity = dca_opp
+                                logger.info(f"🔄 DCA Opportunity detected for {symbol}!")
+                                break
+                    
+                    # Generate chart
+                    chart_path = generate_signal_chart(df, channel, signal, symbol, signal.timeframe)
+                    
+                    if dca_opportunity:
+                        # Send DCA alert instead of regular signal
+                        if send_dca_opportunity_alert(dca_opportunity, chart_path):
+                            logger.info(f"✅ DCA Alert sent for {symbol}")
+                            signals_found += 1
+                            
+                            # Add DCA entry to position
+                            updated_pos = tracker.add_dca_entry(
+                                symbol=symbol,
+                                dca_price=dca_opportunity.dca_entry,
+                                size=1.0
+                            )
+                            
+                            if updated_pos:
+                                # Send confirmation
+                                send_dca_confirmation(updated_pos)
+                        else:
+                            logger.warning(f"⚠️ Failed to send DCA alert for {symbol}")
+>>>>>>> old-version
                     else:
-                        logger.warning(f"⚠️ Failed to send alert for {symbol}")
+                        # Regular signal - send as normal
+                        if send_telegram_alert(signal, chart_path):
+                            logger.info(f"✅ Alert sent for {symbol} {signal.timeframe}")
+                            signals_found += 1
+                            
+                            # Track position for TP/SL monitoring
+                            tracker.add_position(signal)
+                        else:
+                            logger.warning(f"⚠️ Failed to send alert for {symbol}")
                 except Exception as e:
                     logger.error(f"Error sending signal for {symbol}: {e}")
                 
