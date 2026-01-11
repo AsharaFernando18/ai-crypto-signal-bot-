@@ -42,6 +42,12 @@ class Position:
     confidence_score: float
     entry_time: str
     
+    # DCA Support (NEW)
+    initial_entry: Optional[float] = None  # First entry price
+    entries: Optional[List[Dict]] = None  # List of all entries [{price, size, time}]
+    average_entry: Optional[float] = None  # Weighted average entry
+    dca_count: int = 0  # Number of DCA entries made
+    
     # Outcome tracking (filled when closed)
     outcome: Optional[str] = None
     exit_price: Optional[float] = None
@@ -56,15 +62,25 @@ class Position:
     @classmethod
     def from_signal(cls, signal: Signal) -> 'Position':
         """Create Position from Signal object."""
+        entry_price = signal.entry_price
         return cls(
             symbol=signal.symbol,
             direction=signal.direction.value,
-            entry_price=signal.entry_price,
+            entry_price=entry_price,
             take_profit=signal.take_profit,
             stop_loss=signal.stop_loss,
             timeframe=signal.timeframe,
             confidence_score=signal.confidence_score or 0,
-            entry_time=datetime.now().isoformat()
+            entry_time=datetime.now().isoformat(),
+            # DCA initialization
+            initial_entry=entry_price,
+            entries=[{
+                'price': entry_price,
+                'size': 1.0,
+                'time': datetime.now().isoformat()
+            }],
+            average_entry=entry_price,
+            dca_count=0
         )
 
 
@@ -141,6 +157,61 @@ class PositionTracker:
         logger.info(
             f"📈 Position opened: {position.symbol} {position.direction.upper()} "
             f"@ {position.entry_price:.2f} | TP: {position.take_profit:.2f} | SL: {position.stop_loss:.2f}"
+        )
+        
+        return position
+    
+    def add_dca_entry(self, symbol: str, dca_price: float, size: float = 1.0) -> Optional[Position]:
+        """
+        Add a DCA entry to an existing position.
+        
+        Args:
+            symbol: Symbol of the position
+            dca_price: DCA entry price
+            size: Size of DCA entry (default 1.0)
+        
+        Returns:
+            Updated Position object or None if not found
+        """
+        # Find the position
+        position = None
+        for pos in self.active_positions:
+            if pos.symbol == symbol:
+                position = pos
+                break
+        
+        if not position:
+            logger.warning(f"Position not found for DCA: {symbol}")
+            return None
+        
+        # Add new entry
+        new_entry = {
+            'price': dca_price,
+            'size': size,
+            'time': datetime.now().isoformat()
+        }
+        
+        if position.entries is None:
+            position.entries = []
+        position.entries.append(new_entry)
+        
+        # Recalculate average entry
+        total_value = sum(e['price'] * e['size'] for e in position.entries)
+        total_size = sum(e['size'] for e in position.entries)
+        position.average_entry = total_value / total_size
+        
+        # Update DCA count
+        position.dca_count += 1
+        
+        # Update entry_price to average (for PnL calculations)
+        position.entry_price = position.average_entry
+        
+        # Save
+        self._save_data()
+        
+        logger.info(
+            f"🔄 DCA Entry added: {symbol} @ ${dca_price:.2f} | "
+            f"New Average: ${position.average_entry:.2f} | DCA Count: {position.dca_count}"
         )
         
         return position

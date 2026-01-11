@@ -189,10 +189,8 @@ class TelegramNotifier:
         # Calculate potential profit %
         if signal.direction.value == "long":
             profit_pct = ((signal.take_profit - signal.entry_price) / signal.entry_price) * 100
-            risk_pct = ((signal.entry_price - signal.stop_loss) / signal.entry_price) * 100
         else:
             profit_pct = ((signal.entry_price - signal.take_profit) / signal.entry_price) * 100
-            risk_pct = ((signal.stop_loss - signal.entry_price) / signal.entry_price) * 100
         
         # Confidence stars
         score = getattr(signal, 'confidence_score', 0) or 0
@@ -205,7 +203,7 @@ class TelegramNotifier:
         else:
             conf_display = "⭐⭐"
         
-        # Build the premium caption
+        # Build the premium caption (DCA - no SL)
         caption = f"""
 ╔═══════════════════╗
    {direction_emoji} <b>{direction_text} SIGNAL</b> {direction_emoji}
@@ -219,16 +217,126 @@ class TelegramNotifier:
 
    💵 Entry:  <code>${signal.entry_price:,.4f}</code>
    ✅ TP:      <code>${signal.take_profit:,.4f}</code>  (+{profit_pct:.2f}%)
-   ❌ SL:      <code>${signal.stop_loss:,.4f}</code>  (-{risk_pct:.2f}%)
 
 ┗━━━━━━━━━━━━━━━━━┛
 
 📊 <b>R:R Ratio:</b> <code>1:{signal.rr_ratio:.2f}</code>
 🎯 <b>Confidence:</b> {conf_display} ({score:.0f}/100)
 
-<i>⚠️ Risk only what you can afford to lose</i>
+<i>💡 Using DCA strategy</i>
 """
         return caption.strip()
+
+
+def send_dca_opportunity_alert(dca_opp: 'DCAOpportunity', chart_path: Optional[str] = None) -> bool:
+    """
+    Send DCA opportunity alert to Telegram.
+    
+    Args:
+        dca_opp: DCAOpportunity object
+        chart_path: Optional path to chart image
+    
+    Returns:
+        True if successful
+    """
+    # Direction emoji
+    if dca_opp.direction == "long":
+        dir_emoji = "🟢"
+        dir_text = "LONG"
+    else:
+        dir_emoji = "🔴"
+        dir_text = "SHORT"
+    
+    # Confidence stars
+    score = int(dca_opp.confidence_score)
+    if score >= 90:
+        stars = "⭐⭐⭐⭐⭐"
+    elif score >= 75:
+        stars = "⭐⭐⭐⭐"
+    elif score >= 60:
+        stars = "⭐⭐⭐"
+    else:
+        stars = "⭐⭐"
+    
+    # Calculate potential profit after DCA
+    if dca_opp.direction == "long":
+        potential_pct = ((dca_opp.take_profit - dca_opp.new_average) / dca_opp.new_average) * 100
+    else:
+        potential_pct = ((dca_opp.new_average - dca_opp.take_profit) / dca_opp.new_average) * 100
+    
+    caption = f"""
+🔄 <b>DCA OPPORTUNITY!</b> 🔄
+━━━━━━━━━━━━━━
+
+🪙 <b>{dca_opp.symbol.split('/')[0]} {dir_text}</b>
+
+📉 <b>Current Situation:</b>
+   Initial Entry: <code>${dca_opp.original_entry:,.4f}</code>
+   Current Price: <code>${dca_opp.current_price:,.4f}</code>
+   Unrealized: <code>{dca_opp.unrealized_pct:+.2f}%</code>
+
+✅ <b>NEW Channel Detected!</b>
+   {dir_emoji} {dca_opp.channel_type.capitalize()} ({dca_opp.timeframe})
+   DCA Entry: <code>${dca_opp.dca_entry:,.4f}</code>
+   Confidence: {stars}
+
+📊 <b>After DCA (Equal Size):</b>
+   New Average: <code>${dca_opp.new_average:,.4f}</code>
+   TP: <code>${dca_opp.take_profit:,.4f}</code>
+   Potential: <code>+{potential_pct:.2f}%</code>
+
+💡 <i>New channel formed - DCA opportunity!</i>
+"""
+    
+    notifier = get_notifier()
+    if chart_path:
+        return notifier.send_photo(chart_path, caption.strip())
+    else:
+        return notifier.send_message(caption.strip())
+
+
+def send_dca_confirmation(position: 'Position') -> bool:
+    """
+    Send DCA entry confirmation message.
+    
+    Args:
+        position: Updated position with DCA entry
+    
+    Returns:
+        True if successful
+    """
+    # Direction emoji
+    dir_emoji = "📈" if position.direction == "long" else "📉"
+    
+    # Calculate potential profit
+    if position.direction == "long":
+        potential_pct = ((position.take_profit - position.average_entry) / position.average_entry) * 100
+    else:
+        potential_pct = ((position.average_entry - position.take_profit) / position.average_entry) * 100
+    
+    # Format entries
+    entries_text = ""
+    for i, entry in enumerate(position.entries or [], 1):
+        label = "Initial" if i == 1 else f"DCA #{i-1}"
+        entries_text += f"   {label}: <code>${entry['price']:,.4f}</code>\n"
+    
+    caption = f"""
+✅ <b>DCA ENTRY ADDED</b>
+━━━━━━━━━━━━━━
+
+🪙 <b>{position.symbol.split('/')[0]} {position.direction.upper()}</b>
+
+<b>📍 Entries:</b>
+{entries_text}
+<b>📊 Updated Position:</b>
+   Average Entry: <code>${position.average_entry:,.4f}</code>
+   Take Profit: <code>${position.take_profit:,.4f}</code>
+   Potential: <code>+{potential_pct:.2f}%</code>
+   
+🎯 <b>DCA Count:</b> {position.dca_count}
+"""
+    
+    return get_notifier().send_message(caption.strip())
 
 
 # Default notifier instance
@@ -263,15 +371,39 @@ def send_startup_message() -> bool:
     if not notifier.is_configured():
         return False
     
-    message = """
-🤖 <b>Crypto Signal Bot Started</b>
-━━━━━━━━━━━━━━━━━━━━━━
+    from config import TOP_COINS_COUNT, TIMEFRAMES, SCAN_INTERVAL_SECONDS
+    
+    # Format timeframes nicely
+    tf_display = ", ".join(TIMEFRAMES)
+    scan_mins = SCAN_INTERVAL_SECONDS // 60
+    
+    message = f"""
+╔══════════════╗
+  🚀 <b>BOT LIVE</b> 🚀
+╚══════════════╝
 
-📊 Monitoring top coins by volume
-⏱ Timeframes: 15m, 1h
-🔍 Looking for channel patterns
+<b>📊 Signal Samurai</b>
+<i>AI Crypto Signals</i>
 
-Bot is now active and scanning for signals...
+<b>⚙️ Config:</b>
+🪙 {TOP_COINS_COUNT} coins
+⏱ {tf_display}
+🔄 Every {scan_mins}min
+
+<b>🎯 Strategy:</b>
+• Channel entries
+• MTF confluence
+• DCA alerts
+• Auto tracking
+
+<b>🔔 Alerts:</b>
+📈 Signals
+🔄 DCA ops
+✅ TP hits
+
+━━━━━━━━━━━━━━
+<i>🟢 Scanning...</i>
+<i>💡 DCA mode</i>
 """
     return notifier.send_message(message.strip())
 
